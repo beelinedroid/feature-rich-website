@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Cat Pics 🐈</title>
+
+<!-- ✅ Link PWA Manifest -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#ffcc00"/>
+
+<style>
+  /* ---------- Root Variables ---------- */
+  :root {
+    --bg: #fafafa;
+    --fg: #222;
+    --card: #fff;
+    --gap: .5rem;
+    --radius: 8px;
+    --transition: background .25s, color .25s;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121212;
+      --fg: #eee;
+      --card: #1e1e1e;
+    }
+  }
+
+  body.dark {
+    --bg: #121212;
+    --fg: #eee;
+    --card: #1e1e1e;
+  }
+  body {
+    margin: 0 auto;
+    max-width: 900px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: var(--gap);
+    transition: var(--transition);
+    min-height: 100vh;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: var(--gap);
+  }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: var(--gap);
+  }
+
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    overflow: hidden;
+    opacity: 0;
+    animation: fade .4s forwards;
+    box-shadow: 0 2px 6px rgba(0,0,0,.06);
+    position: relative;
+    transition: box-shadow .2s;
+  }
+  .card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.12); }
+
+  .deleteBtn {
+    position: absolute;
+    top: .3rem;
+    right: .3rem;
+    background: rgba(0,0,0,0.5);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    font-size: .9rem;
+    cursor: pointer;
+    width: 1.5rem;
+    height: 1.5rem;
+    line-height: 1.5rem;
+    text-align: center;
+    transition: background .2s;
+  }
+  .deleteBtn:hover { background: rgba(255,0,0,0.7); }
+
+  @keyframes fade { to { opacity: 1 } }
+
+  .card img {
+    width: 100%;
+    display: block;
+    cursor: zoom-in;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    transition: transform .2s;
+  }
+  .card img:hover { transform: scale(1.03); }
+
+  #lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s;
+    z-index: 1000;
+  }
+  #lightbox.show { opacity: 1; pointer-events: auto; }
+
+  #lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    border-radius: var(--radius);
+    box-shadow: 0 6px 32px rgba(0,0,0,.3);
+    background: var(--card);
+    padding: .5rem;
+  }
+
+  #dropZone {
+    border: 2px dashed var(--fg);
+    border-radius: var(--radius);
+    padding: 2rem;
+    text-align: center;
+    margin-block: 1rem;
+    background: var(--bg);
+    transition: background .2s, border-color .2s;
+    cursor: pointer;
+    user-select: none;
+  }
+  #dropZone.dragover {
+    background: var(--card);
+    border-color: #888;
+  }
+
+  button, input {
+    font-size: 1rem;
+    padding: .4rem .6rem;
+    border-radius: var(--radius);
+    border: none;
+    background: var(--card);
+    color: var(--fg);
+    cursor: pointer;
+    margin-left: .3rem;
+    transition: background .2s, color .2s;
+  }
+  button:hover, input:hover {
+    background: #eee;
+    color: #222;
+  }
+
+  .hidden { display: none }
+
+  @media (max-width: 500px) {
+    header { flex-direction: column; align-items: flex-start; gap: .5rem; }
+    #dropZone { padding: 1rem; }
+  }
+</style>
+</head>
+
+<body>
+<header>
+  <h1>Cat Pics 🐈</h1>
+  <div>
+    <button id="addBtn" title="Add cat images">+ Add</button>
+    <button id="darkBtn" title="Toggle dark mode">🌗</button>
+    <button id="clearBtn" title="Clear all cat pics">🗑️</button>
+  </div>
+</header>
+
+<input type="file" accept="image/*" id="fileIn" class="hidden" multiple />
+<div id="dropZone" tabindex="0">Drop images here or paste (<kbd>Ctrl+V</kbd>)</div>
+<section id="grid"></section>
+
+<div id="lightbox"><img src="" alt=""/></div>
+
+<script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"></script>
+<script>
+/* ======================================================
+   🐾 CAT PICS PWA – Offline Image Gallery
+   ====================================================== */
+
+/* ---------- LocalForage Setup ---------- */
+const store = localforage.createInstance({ name: "catPics" });
+
+/* ---------- DOM Elements ---------- */
+const grid = document.getElementById('grid');
+const fileInput = document.getElementById('fileIn');
+const lightbox = document.getElementById('lightbox');
+const lbImg = lightbox.querySelector('img');
+const dropZone = document.getElementById('dropZone');
+const clearBtn = document.getElementById('clearBtn');
+let cats = new Map();
+
+/* ---------- Utilities ---------- */
+const $ = q => document.querySelector(q);
+
+/** Compress image before storing (thumbnail) */
+const compress = (file, maxW = 300) => new Promise(res => {
+  const img = new Image();
+  img.onload = () => {
+    const ratio = img.height / img.width;
+    const c = document.createElement('canvas');
+    c.width = maxW;
+    c.height = maxW * ratio;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    res(c.toDataURL('image/jpeg', 0.7));
+  };
+  img.src = URL.createObjectURL(file);
+});
+const createBlobUrl = file => URL.createObjectURL(file);
+
+/* ---------- Load & Render ---------- */
+async function loadCats() {
+  grid.innerHTML = '';
+  cats.clear();
+  await store.iterate((data, key) => {
+    cats.set(key, data);
+    const [thumb, full] = data;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <img src="${thumb}" data-full="${full}" alt="cat"/>
+      <button class="deleteBtn" data-key="${key}" title="Delete">×</button>
+    `;
+    grid.appendChild(card);
+  });
+}
+loadCats();
+
+/* ---------- Save Cat ---------- */
+async function saveCat(file) {
+  if (!file.type.startsWith('image/')) return;
+  const thumb = await compress(file);
+  const full = createBlobUrl(file);
+  const key = `${Date.now()}_${Math.random().toString(36).slice(2)}_${file.name}`;
+  await store.setItem(key, [thumb, full]);
+  loadCats();
+}
+
+/* ---------- Event Handling ---------- */
+// Add new image
+$('#addBtn').onclick = () => fileInput.click();
+fileInput.onchange = () => [...fileInput.files].forEach(saveCat);
+
+// Drag/drop & paste
+['dragenter', 'dragover'].forEach(ev => {
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+  });
+});
+['dragleave', 'drop'].forEach(ev => {
+  dropZone.addEventListener(ev, e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+  });
+});
+dropZone.addEventListener('drop', e => {
+  [...e.dataTransfer.files].forEach(saveCat);
+});
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', e => {
+  if (['Enter', ' '].includes(e.key)) fileInput.click();
+});
+window.addEventListener('paste', e => {
+  [...e.clipboardData.files].forEach(saveCat);
+});
+
+/* ---------- Lightbox ---------- */
+grid.addEventListener('click', e => {
+  const img = e.target.closest('img');
+  if (img) {
+    lbImg.src = img.dataset.full || img.src;
+    lightbox.classList.add('show');
+  }
+  const delBtn = e.target.closest('.deleteBtn');
+  if (delBtn) {
+    const key = delBtn.dataset.key;
+    store.removeItem(key).then(loadCats);
+    e.stopPropagation();
+  }
+});
+lightbox.addEventListener('click', () => {
+  lbImg.src = '';
+  lightbox.classList.remove('show');
+});
+document.addEventListener('keydown', e => {
+  if (lightbox.classList.contains('show') && e.key === 'Escape') {
+    lbImg.src = '';
+    lightbox.classList.remove('show');
+  }
+});
+
+/* ---------- Dark Mode ---------- */
+$('#darkBtn').onclick = () => document.body.classList.toggle('dark');
+
+/* ---------- Clear All ---------- */
+clearBtn.onclick = async () => {
+  if (confirm('Clear all cat pics?')) {
+    await store.clear();
+    loadCats();
+  }
+};
+
+/* ---------- Register Service Worker ---------- */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('service-worker.js')
+    .then(() => console.log('🐾 Service Worker Registered'))
+    .catch(console.error);
+}
+
+/* ---------- Install Prompt ---------- */
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  const installBtn = document.createElement('button');
+  installBtn.textContent = '📲 Install Cat Pics';
+  installBtn.style = `
+    position:fixed;bottom:1rem;right:1rem;padding:.6rem 1rem;
+    background:#ffcc00;color:#000;border:none;border-radius:8px;
+    box-shadow:0 2px 6px rgba(0,0,0,.3);cursor:pointer;z-index:9999;
+  `;
+  document.body.appendChild(installBtn);
+  installBtn.onclick = async () => {
+    e.prompt();
+    const result = await e.userChoice;
+    console.log('Install choice:', result.outcome);
+    installBtn.remove();
+  };
+});
+</script>
+</body>
+</html>
